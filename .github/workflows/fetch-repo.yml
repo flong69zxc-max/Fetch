@@ -1,0 +1,81 @@
+name: Fetch AirCard reference
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Clone AirCard-iOS
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/aircard
+          git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
+
+      - name: Extract
+        run: |
+          set -euo pipefail
+          SRC=/tmp/aircard
+          DST=reference/aircard
+
+          rm -rf "$DST"
+          mkdir -p "$DST"
+
+          (cd "$SRC" && find . -type f -not -path "./.git/*" | sort) > "$DST/_tree.txt"
+
+          IOS_DIR="$SRC/ios-app"
+          if [ ! -d "$IOS_DIR" ]; then
+            IOS_DIR=$(find "$SRC" -maxdepth 2 -type d \( -name "ios-app" -o -name "ios_app" -o -name "iOS-App" \) | head -1)
+          fi
+          if [ -z "${IOS_DIR:-}" ] || [ ! -d "$IOS_DIR" ]; then
+            echo "ios-app not found, falling back to whole repo"
+            IOS_DIR="$SRC"
+          fi
+          echo "IOS_DIR=$IOS_DIR"
+
+          while IFS= read -r f; do
+            case "$f" in
+              *.swift|*.h|*.m|*.mm|*.plist|*.yml|*.yaml|*.entitlements|*.json|*.md|*.strings)
+                rel="${f#$IOS_DIR/}"
+                mkdir -p "$DST/ios-app/$(dirname "$rel")"
+                cp "$f" "$DST/ios-app/$rel"
+                ;;
+            esac
+          done < <(find "$IOS_DIR" -type f \
+                    -not -path "*/.git/*" \
+                    -not -path "*/build/*" \
+                    -not -path "*/.build/*" \
+                    -not -path "*/DerivedData/*" \
+                    -not -path "*/xcuserdata/*")
+
+          find "$SRC" -name "Cargo.toml" -not -path "*/target/*" -not -path "*/.git/*" | while IFS= read -r f; do
+            rel="${f#$SRC/}"
+            mkdir -p "$DST/rust/$(dirname "$rel")"
+            cp "$f" "$DST/rust/$rel"
+          done
+
+          if [ -f "$SRC/README.md" ]; then
+            cp "$SRC/README.md" "$DST/_README.md"
+          fi
+
+          echo "---- files copied ----"
+          find "$DST" -type f | sort
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reference/
+          if git diff --cached --quiet; then
+            echo "no changes"
+            exit 0
+          fi
+          git commit -m "Fetch AirCard-iOS reference [skip ci]"
+          git push
