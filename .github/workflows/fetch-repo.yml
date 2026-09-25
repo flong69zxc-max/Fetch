@@ -19,63 +19,78 @@ jobs:
           rm -rf /tmp/aircard
           git clone --depth 1 https://github.com/Mak5er/AirCard-iOS.git /tmp/aircard
 
-      - name: Extract
+      - name: Dump to single txt
         run: |
           set -euo pipefail
           SRC=/tmp/aircard
-          DST=reference/aircard
+          OUT=reference/aircard_dump.txt
+          mkdir -p reference
+          : > "$OUT"
 
-          rm -rf "$DST"
-          mkdir -p "$DST"
+          MAX_BYTES=1500000
+          TOTAL=0
 
-          (cd "$SRC" && find . -type f -not -path "./.git/*" | sort) > "$DST/_tree.txt"
+          echo "================================================================" >> "$OUT"
+          echo "AirCard-iOS reference dump" >> "$OUT"
+          echo "commit: $(cd "$SRC" && git rev-parse HEAD)" >> "$OUT"
+          echo "================================================================" >> "$OUT"
+          echo "" >> "$OUT"
 
-          IOS_DIR="$SRC/ios-app"
-          if [ ! -d "$IOS_DIR" ]; then
-            IOS_DIR=$(find "$SRC" -maxdepth 2 -type d \( -name "ios-app" -o -name "ios_app" -o -name "iOS-App" \) | head -1)
-          fi
-          if [ -z "${IOS_DIR:-}" ] || [ ! -d "$IOS_DIR" ]; then
-            echo "ios-app not found, falling back to whole repo"
-            IOS_DIR="$SRC"
-          fi
-          echo "IOS_DIR=$IOS_DIR"
+          echo "### FILE TREE ###" >> "$OUT"
+          (cd "$SRC" && find . -type f -not -path "./.git/*" -not -path "*/target/*" | sort) >> "$OUT"
+          echo "" >> "$OUT"
 
-          while IFS= read -r f; do
-            case "$f" in
-              *.swift|*.h|*.m|*.mm|*.plist|*.yml|*.yaml|*.entitlements|*.json|*.md|*.strings)
-                rel="${f#$IOS_DIR/}"
-                mkdir -p "$DST/ios-app/$(dirname "$rel")"
-                cp "$f" "$DST/ios-app/$rel"
-                ;;
-            esac
-          done < <(find "$IOS_DIR" -type f \
-                    -not -path "*/.git/*" \
-                    -not -path "*/build/*" \
-                    -not -path "*/.build/*" \
-                    -not -path "*/DerivedData/*" \
-                    -not -path "*/xcuserdata/*")
+          append_file () {
+            local f="$1"
+            local rel="$2"
+            local size
+            size=$(wc -c < "$f" | tr -d ' ')
+            if [ $((TOTAL + size)) -gt "$MAX_BYTES" ]; then
+              echo "SKIPPED (size limit): $rel" >> "$OUT"
+              return
+            fi
+            TOTAL=$((TOTAL + size))
+            echo "================================================================" >> "$OUT"
+            echo "FILE: $rel  ($size bytes)" >> "$OUT"
+            echo "================================================================" >> "$OUT"
+            cat "$f" >> "$OUT"
+            echo "" >> "$OUT"
+          }
 
-          find "$SRC" -name "Cargo.toml" -not -path "*/target/*" -not -path "*/.git/*" | while IFS= read -r f; do
-            rel="${f#$SRC/}"
-            mkdir -p "$DST/rust/$(dirname "$rel")"
-            cp "$f" "$DST/rust/$rel"
-          done
+          PRIORITY_EXTS='\.swift$|\.h$|\.m$|\.mm$|\.plist$|\.yml$|\.yaml$|\.entitlements$|\.strings$|\.md$|Cargo\.toml$'
 
-          if [ -f "$SRC/README.md" ]; then
-            cp "$SRC/README.md" "$DST/_README.md"
-          fi
+          find "$SRC" -type f \
+            -not -path "*/.git/*" \
+            -not -path "*/target/*" \
+            -not -path "*/build/*" \
+            -not -path "*/.build/*" \
+            -not -path "*/DerivedData/*" \
+            -not -path "*/xcuserdata/*" \
+            -not -path "*/node_modules/*" \
+            -not -path "*/Pods/*" \
+            | grep -E "$PRIORITY_EXTS" \
+            | sort \
+            | while IFS= read -r f; do
+                rel="${f#$SRC/}"
+                append_file "$f" "$rel"
+              done
 
-          echo "---- files copied ----"
-          find "$DST" -type f | sort
+          echo "================================================================" >> "$OUT"
+          echo "TOTAL BYTES IN DUMP: $TOTAL" >> "$OUT"
+          echo "================================================================" >> "$OUT"
+
+          echo "---- final size ----"
+          ls -lh "$OUT"
+          wc -c "$OUT"
 
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add reference/
+          git add reference/aircard_dump.txt
           if git diff --cached --quiet; then
             echo "no changes"
             exit 0
           fi
-          git commit -m "Fetch AirCard-iOS reference [skip ci]"
+          git commit -m "Fetch AirCard reference dump [skip ci]"
           git push
